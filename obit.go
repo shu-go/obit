@@ -108,8 +108,12 @@ func main() {
 	flag.Parse()
 
 	if targetFlag == "" {
-		fmt.Fprintf(os.Stderr, "-t is required.\n")
-		os.Exit(-1)
+		if flag.NArg() > 0 {
+			target = strings.Join(flag.Args()[1:], " ")
+		} else {
+			fmt.Fprintf(os.Stderr, "-t is required.\n")
+			os.Exit(-1)
+		}
 	} else {
 		target = targetFlag
 	}
