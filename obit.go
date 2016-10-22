@@ -5,11 +5,27 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 	//"github.com/golang/sys/windows"
+)
+
+type (
+	Process struct {
+		ID       uint32
+		Name     string
+		ParentID uint32
+	}
+	ProcessSet map[uint32]*Process // pid -> &Process{} of pid
+
+	Window struct {
+		Process *Process
+		Title   string
+	}
+	ProcessWndMap map[uint32][]*Window // pid -> &Window{}
 )
 
 var (
@@ -31,8 +47,8 @@ const (
 	TH32CS_SNAPPROCESS = 0x00000002
 )
 
-func ListParentProcesses() ([]int, error) {
-	p2pp := make(map[uint32]uint32) //pid -> parent of pid
+func ListProcesses() (ProcessSet, error) {
+	set := make(ProcessSet)
 
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
@@ -45,7 +61,8 @@ func ListParentProcesses() ([]int, error) {
 		return nil, err
 	}
 	for {
-		p2pp[pe.ProcessID] = pe.ParentProcessID
+		set[pe.ProcessID] = &Process{ID: pe.ProcessID, ParentID: pe.ParentProcessID, Name: syscall.UTF16ToString(pe.ExeFile[:])}
+
 		err = windows.Process32Next(snapshot, &pe)
 		if err != nil {
 			break
@@ -53,21 +70,25 @@ func ListParentProcesses() ([]int, error) {
 	}
 	windows.CloseHandle(snapshot)
 
-	list := make([]int, 0, 2)
+	return set, nil
+}
 
-	curr := syscall.Getpid()
-	list = append(list, curr)
+func ListParentProcesses(all ProcessSet) ProcessSet {
+
+	set := make(ProcessSet)
+
+	var curr uint32 = uint32(syscall.Getpid())
 	for {
-		list = append(list, curr)
-
-		if curru32, ok := p2pp[uint32(curr)]; ok {
-			curr = int(curru32)
-		} else {
+		p, found := all[curr]
+		if !found {
 			break
 		}
+
+		set[curr] = p
+		curr = p.ParentID
 	}
 
-	return list, nil
+	return set
 }
 
 func main() {
@@ -82,7 +103,7 @@ func main() {
 	flag.BoolVar(&verbose, "v", false, "Verbose output to stderr.")
 	flag.StringVar(&targetFlag, "t", "", "Title of the target window. sub-match for each space-separated words.")
 	flag.IntVar(&waitFlag, "w", -1, "Wait in milliseconds. (negative is INFINITE)")
-	flag.StringVar(&formatFlag, "f", "{PID} {TITLE}", "Format of stdout (default to '{PID} {TITLE}')")
+	flag.StringVar(&formatFlag, "f", "{TITLE}({PROCESS})", "Format of stdout (default to '{TITLE}({PROCESS})')")
 
 	flag.Parse()
 
@@ -99,16 +120,43 @@ func main() {
 	}
 	format = formatFlag
 
-	ignoreList, err := ListParentProcesses()
+	// start listing
+
+	allProcesses, err := ListProcesses()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to list processes: %v\n", err)
 		os.Exit(-1)
 	}
+
+	ignoredProcesses := ListParentProcesses(allProcesses)
 	if verbose {
-		for _, elem := range ignoreList {
-			fmt.Fprintf(os.Stderr, "ignore: %v\n", elem)
+		for _, p := range ignoredProcesses {
+			fmt.Fprintf(os.Stderr, "ignore: %v\n", p)
 		}
 	}
+
+	//
+
+	targetProcesseSet := make(ProcessSet)
+	targetWindowMap := make(ProcessWndMap)
+
+	// enum target processes
+
+	for _, p := range allProcesses {
+		matched := true
+		for _, w := range strings.Split(target, " ") {
+			if !strings.Contains(p.Name, w) {
+				matched = false
+				break
+			}
+		}
+
+		if matched {
+			targetProcesseSet[p.ID] = p
+		}
+	}
+
+	// enum windows and wait it if needed
 
 	cb := syscall.NewCallback(func(hwnd syscall.Handle, lparam uintptr) uintptr {
 		b, _, _ := isWindow.Call(uintptr(hwnd))
@@ -129,8 +177,10 @@ func main() {
 		)
 		title := syscall.UTF16ToString(buff)
 
-		if !strings.Contains(title, target) {
-			return 1
+		for _, w := range strings.Split(target, " ") {
+			if !strings.Contains(title, w) {
+				return 1
+			}
 		}
 
 		var processID uintptr
@@ -140,34 +190,19 @@ func main() {
 		)
 
 		// skip its self and its parents
-		for _, elem := range ignoreList {
-			if elem == int(processID) {
-				return 1
-			}
-		}
-
-		hProcess, err := windows.OpenProcess(
-			SYNCHRONIZE,
-			false,
-			uint32(processID),
-		)
-		if err != nil {
+		if _, found := ignoredProcesses[uint32(processID)]; found {
 			return 1
 		}
-		if hProcess != 0 {
-			if verbose {
-				fmt.Fprintf(os.Stderr, "'%v' -> %v -> %v\n", title, processID, hProcess)
-			}
-			windows.WaitForSingleObject(
-				hProcess,
-				wait,
-			)
-			windows.CloseHandle(hProcess)
 
-			out := format
-			out = strings.Replace(out, "{PID}", fmt.Sprintf("%v", processID), -1)
-			out = strings.Replace(out, "{TITLE}", title, -1)
-			fmt.Fprintln(os.Stdout, out)
+		// add to targetProcesseSet
+
+		if p, found := allProcesses[uint32(processID)]; found {
+			targetProcesseSet[p.ID] = p
+
+			if _, found := targetWindowMap[p.ID]; !found {
+				targetWindowMap[p.ID] = make([]*Window, 0, 1)
+			}
+			targetWindowMap[p.ID] = append(targetWindowMap[p.ID], &Window{Process: p, Title: title})
 		}
 
 		return 1
@@ -178,4 +213,52 @@ func main() {
 		fmt.Fprintf(os.Stderr, "USER32.EnumWindows returned FALSE")
 		os.Exit(-1)
 	}
+
+	wg := sync.WaitGroup{}
+
+	for processID, p := range targetProcesseSet {
+		wg.Add(1)
+		go func(processID uint32, p *Process) {
+			hProcess, err := windows.OpenProcess(
+				SYNCHRONIZE,
+				false,
+				processID,
+			)
+			if err != nil {
+				//continue
+				wg.Done()
+				return
+			}
+			if hProcess != 0 {
+				if verbose {
+					if w, found := targetWindowMap[processID]; found {
+						fmt.Fprintf(os.Stderr, "'%v' -> '%v' -> %v\n", w[0].Title, p.Name, processID)
+					} else {
+						fmt.Fprintf(os.Stderr, "'%v' -> %v\n", p.Name, processID)
+					}
+				}
+				windows.WaitForSingleObject(
+					hProcess,
+					wait,
+				)
+				windows.CloseHandle(hProcess)
+
+				out := format
+				out = strings.Replace(out, "{PID}", fmt.Sprintf("%v", processID), -1)
+				out = strings.Replace(out, "{PROCESS}", p.Name, -1)
+				if strings.Contains(out, "{TITLE}") {
+					if w, found := targetWindowMap[processID]; found {
+						out = strings.Replace(out, "{TITLE}", w[0].Title, -1)
+					} else {
+						out = strings.Replace(out, "{TITLE}", "", -1)
+					}
+				}
+				//out = strings.Replace(out, "{PROCESS}", , -1)
+				fmt.Fprintln(os.Stdout, out)
+
+				wg.Done()
+			}
+		}(processID, p)
+	}
+	wg.Wait()
 }
