@@ -149,7 +149,7 @@ func main() {
 	for _, p := range allProcesses {
 		matched := true
 		for _, w := range strings.Split(target, " ") {
-			if !strings.Contains(p.Name, w) {
+			if !strings.Contains(strings.ToUpper(p.Name), strings.ToUpper(w)) {
 				matched = false
 				break
 			}
@@ -182,7 +182,7 @@ func main() {
 		title := syscall.UTF16ToString(buff)
 
 		for _, w := range strings.Split(target, " ") {
-			if !strings.Contains(title, w) {
+			if !strings.Contains(strings.ToUpper(title), strings.ToUpper(w)) {
 				return 1
 			}
 		}
