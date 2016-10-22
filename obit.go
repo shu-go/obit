@@ -109,7 +109,7 @@ func main() {
 
 	if targetFlag == "" {
 		if flag.NArg() > 0 {
-			target = strings.Join(flag.Args()[1:], " ")
+			target = strings.Join(flag.Args()[0:], " ")
 		} else {
 			fmt.Fprintf(os.Stderr, "-t is required.\n")
 			os.Exit(-1)
