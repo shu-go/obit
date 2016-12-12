@@ -92,6 +92,7 @@ func ListParentProcesses(all ProcessSet) ProcessSet {
 }
 
 func main() {
+	var onlyLast bool
 	var verbose bool
 	var target string
 	var wait uint32
@@ -100,6 +101,7 @@ func main() {
 	var targetFlag string
 	var waitFlag int
 	var formatFlag string
+	flag.BoolVar(&onlyLast, "last", false, "Output to stdout only when all processes exit, without process info.")
 	flag.BoolVar(&verbose, "v", false, "Verbose output to stderr.")
 	flag.StringVar(&targetFlag, "t", "", "Title of the target window. sub-match for each space-separated words.")
 	flag.IntVar(&waitFlag, "w", -1, "Wait in milliseconds. (negative is INFINITE)")
@@ -258,11 +260,17 @@ func main() {
 					}
 				}
 				//out = strings.Replace(out, "{PROCESS}", , -1)
-				fmt.Fprintln(os.Stdout, out)
+				if !onlyLast {
+					fmt.Fprintln(os.Stdout, out)
+				}
 
 				wg.Done()
 			}
 		}(processID, p)
 	}
 	wg.Wait()
+
+	if onlyLast && len(targetProcesseSet) != 0 {
+		fmt.Fprintf(os.Stdout, "All processes exited: %v\n", target)
+	}
 }
