@@ -210,10 +210,10 @@ func main() {
 	app.Flags = []cli.Flag{
 		cli.BoolFlag{Name: "verbose", Usage: "verbose output to stderr"},
 
-		cli.StringFlag{Name: "target, t", Value: "wp", Usage: "target: 'w' for windows, 'p' for processes"},
-		cli.StringFlag{Name: "format, f", Value: "{TITLE}({PROCESS})", Usage: "format of stdout"},
-		cli.IntFlag{Name: "timeout", Value: -1, Usage: "timeout in milliseconds (negative is INFINITE)"},
-		cli.BoolFlag{Name: "last, l", Usage: "output to stdout only when all processes exit, without process info"},
+		cli.StringFlag{Name: "target, t", Value: "wp", Usage: "(for DEFAULT SUBCOMMAND) target: 'w' for windows, 'p' for processes"},
+		cli.StringFlag{Name: "format, f", Value: "{TITLE}({PROCESS})", Usage: "(for DEFAULT SUBCOMMAND) format of stdout"},
+		cli.IntFlag{Name: "timeout", Value: -1, Usage: "(for DEFAULT SUBCOMMAND) timeout in milliseconds (negative is INFINITE)"},
+		cli.BoolFlag{Name: "last, l", Usage: "(for DEFAULT SUBCOMMAND) output to stdout only when all processes exit, without process info"},
 	}
 	app.Commands = []cli.Command{
 		{
@@ -229,7 +229,7 @@ func main() {
 		{
 			Name:    "wait",
 			Aliases: []string{"w"},
-			Usage:   "wait for processes and notify obituary via stdout",
+			Usage:   "(DEFAULT SUBCOMMAND) wait for processes and notify obituary via stdout",
 			Flags: []cli.Flag{
 				cli.StringFlag{Name: "target, t", Value: "wp", Usage: "target: 'w' for windows, 'p' for processes"},
 				cli.StringFlag{Name: "format, f", Value: "{TITLE}({PROCESS})", Usage: "format of stdout"},
