@@ -3,16 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
 
+	"bitbucket.org/shu/gli"
 	"golang.org/x/sys/windows"
 	//"github.com/golang/sys/windows"
-
-	"github.com/urfave/cli"
 )
 
 type (
@@ -203,46 +201,30 @@ func (p *Process) Format(format string) string {
 }
 
 func main() {
-	app := cli.NewApp()
+	app := gli.New(&globalCmd{})
 	app.Name = "obit"
-	app.Usage = "obituary notifier via stdout"
-	app.Version = "0.1.0"
-	app.Flags = []cli.Flag{
-		cli.BoolFlag{Name: "verbose", Usage: "verbose output to stderr"},
+	app.Desc = "obituary notifier via stdout"
+	app.Version = "0.2.0"
+	app.Usage = `obit {window title or process name, waited for its end}`
+	app.Copyright = "(C) 2017 Shuhei Kubota"
 
-		cli.StringFlag{Name: "target, t", Value: "wp", Usage: "(for DEFAULT SUBCOMMAND) target: 'w' for windows, 'p' for processes"},
-		cli.StringFlag{Name: "format, f", Value: "{TITLE}({PROCESS})", Usage: "(for DEFAULT SUBCOMMAND) format of stdout"},
-		cli.IntFlag{Name: "timeout", Value: -1, Usage: "(for DEFAULT SUBCOMMAND) timeout in milliseconds (negative is INFINITE)"},
-		cli.BoolFlag{Name: "last, l", Usage: "(for DEFAULT SUBCOMMAND) output to stdout only when all processes exit, without process info"},
+	err := app.Run(os.Args)
+	if err != nil {
+		os.Exit(-1)
 	}
-	app.Commands = []cli.Command{
-		{
-			Name:    "list",
-			Aliases: []string{"ls"},
-			Usage:   "list windows or/or processes matching to names",
-			Flags: []cli.Flag{
-				cli.StringFlag{Name: "target, t", Value: "wp", Usage: "target: 'w' for windows, 'p' for processes"},
-				cli.StringFlag{Name: "format, f", Value: "{TITLE}({PROCESS})", Usage: "format of stdout"},
-			},
-			Action: list,
-		},
-		{
-			Name:    "wait",
-			Aliases: []string{"w"},
-			Usage:   "(DEFAULT SUBCOMMAND) wait for processes and notify obituary via stdout",
-			Flags: []cli.Flag{
-				cli.StringFlag{Name: "target, t", Value: "wp", Usage: "target: 'w' for windows, 'p' for processes"},
-				cli.StringFlag{Name: "format, f", Value: "{TITLE}({PROCESS})", Usage: "format of stdout"},
-				cli.IntFlag{Name: "timeout", Value: -1, Usage: "timeout in milliseconds (negative is INFINITE)"},
-				cli.BoolFlag{Name: "last, l", Usage: "output to stdout only when all processes exit, without process info"},
-			},
-			Action: wait,
-		},
-	}
-	app.Action = wait
-	app.Run(os.Args)
-	return
 }
+
+type globalCmd struct {
+	Verbose bool `help:"verbose output to stderr"`
+
+	Target string `cli:"target, t"  default:"wp"  help:"target: 'w' for windows, 'p' for processes"`
+	Format string `cli:"format, f"  default:"{TITLE}({PROCESS})"  help:"format of stdout"`
+
+	Timeout int  `default:"-1"  help:"timeout in milliseconds (negative is INFINITE)"`
+	Last    bool `cli:"last, l"  help:"output to stdout only when all processes exit, without process info"`
+}
+
+/*
 func list(c *cli.Context) error {
 	var wins []*Window
 	var procs []*Process
@@ -262,7 +244,7 @@ func list(c *cli.Context) error {
 		procDict = MakeProcessDict(allProcs)
 	}
 
-	if strings.Contains(c.String("target"), "w") {
+	if strings.Contains(g.Target, "w") {
 		wins, err = ListWindows(names, procDict)
 		if err != nil {
 			return fmt.Errorf("failed to list windows (%q): %v", names, err)
@@ -286,7 +268,7 @@ func list(c *cli.Context) error {
 		})
 
 	}
-	if strings.Contains(c.String("target"), "p") {
+	if strings.Contains(g.Target, "p") {
 		procs, err = ListProcesses(names)
 		if err != nil {
 			return fmt.Errorf("failed to list processes: %v", err)
@@ -298,7 +280,7 @@ func list(c *cli.Context) error {
 	}
 
 	if len(wins)+len(procs) == 0 {
-		if c.GlobalBool("verbose") {
+		if g.Verbose {
 			fmt.Printf("no result for %q\n", names)
 		}
 		return nil
@@ -350,10 +332,10 @@ func list(c *cli.Context) error {
 		var output string
 		///log.Printf("%v for %#v", procOutput, win)
 		if procOutput {
-			output = proc.Format(c.String("format"))
+			output = proc.Format(g.Format)
 			pi++
 		} else {
-			output = win.Format(c.String("format"))
+			output = win.Format(g.Format)
 			wi++
 		}
 
@@ -362,12 +344,14 @@ func list(c *cli.Context) error {
 
 	return nil
 }
-func wait(c *cli.Context) error {
+*/
+
+func (g globalCmd) Run(args []string) error {
 	var wins []*Window
 	var procs []*Process
 	var err error
 
-	names := c.Args()
+	names := args
 	if len(names) == 0 {
 		names = nil
 	}
@@ -381,14 +365,14 @@ func wait(c *cli.Context) error {
 		allProcs = MakeProcessDict(a)
 	}
 
-	if strings.Contains(c.String("target"), "w") {
+	if strings.Contains(g.Target, "w") {
 		wins, err = ListWindows(names, allProcs)
 		if err != nil {
 			return fmt.Errorf("failed to list windows (%q): %v", names, err)
 		}
 
 	}
-	if strings.Contains(c.String("target"), "p") {
+	if strings.Contains(g.Target, "p") {
 		procs, err = ListProcesses(names)
 		if err != nil {
 			return fmt.Errorf("failed to list processes: %v", err)
@@ -396,7 +380,7 @@ func wait(c *cli.Context) error {
 	}
 
 	if len(wins)+len(procs) == 0 {
-		if c.GlobalBool("verbose") {
+		if g.Verbose {
 			fmt.Printf("no result for %q\n", names)
 		}
 		return nil
@@ -415,25 +399,25 @@ func wait(c *cli.Context) error {
 
 	ignoredProcesseDict := ListParentProcesseDict(allProcs)
 
-	if c.GlobalBool("verbose") {
+	if g.Verbose {
 		fmt.Fprintf(os.Stderr, "%d Windows\n", len(wins))
 		fmt.Fprintf(os.Stderr, "%d Processes\n", len(procs))
 
 		fmt.Fprintf(os.Stderr, "target windows:\n")
 		for _, v := range wins {
-			fmt.Fprintf(os.Stderr, "  %s\n", v.Format(c.String("format")))
+			fmt.Fprintf(os.Stderr, "  %s\n", v.Format(g.Format))
 		}
 		fmt.Fprintf(os.Stderr, "target processes:\n")
 		for _, v := range procs {
-			fmt.Fprintf(os.Stderr, "  %s\n", v.Format(c.String("format")))
+			fmt.Fprintf(os.Stderr, "  %s\n", v.Format(g.Format))
 		}
 
 		fmt.Fprintf(os.Stderr, "ignored processes (%v):\n", uint32(syscall.Getpid()))
 		for _, v := range ignoredProcesseDict {
-			fmt.Fprintf(os.Stderr, "  %s\n", v.Format(c.String("format")))
+			fmt.Fprintf(os.Stderr, "  %s\n", v.Format(g.Format))
 		}
 
-		if c.Bool("last") {
+		if g.Last {
 			fmt.Fprintf(os.Stderr, "output to stdout is going to do at last\n")
 		}
 	}
@@ -443,7 +427,7 @@ func wait(c *cli.Context) error {
 	}
 
 	if len(targetProcessDict) == 0 {
-		if c.GlobalBool("verbose") {
+		if g.Verbose {
 			fmt.Printf("no result for %q\n", names)
 		}
 		return nil
@@ -451,8 +435,8 @@ func wait(c *cli.Context) error {
 
 	wg := sync.WaitGroup{}
 	for pid, p := range targetProcessDict {
-		if c.GlobalBool("verbose") {
-			fmt.Fprintf(os.Stderr, "waiting for %s\n", p.Format(c.String("format")))
+		if g.Verbose {
+			fmt.Fprintf(os.Stderr, "waiting for %s\n", p.Format(g.Format))
 		}
 
 		wg.Add(1)
@@ -465,23 +449,23 @@ func wait(c *cli.Context) error {
 			if err != nil {
 				//continue
 				wg.Done()
-				fmt.Fprintf(os.Stderr, "failed to wait for %v: %v\n", p.Format(c.String("format")), err)
+				fmt.Fprintf(os.Stderr, "failed to wait for %v: %v\n", p.Format(g.Format), err)
 				return
 			}
 			if hProcess != 0 {
 				event, _ := windows.WaitForSingleObject(
 					hProcess,
-					uint32(c.Int("timeout")),
+					uint32(g.Timeout),
 				)
 				windows.CloseHandle(hProcess)
 
 				if event == WAIT_TIMEOUT {
-					if c.GlobalBool("verbose") {
-						fmt.Fprintf(os.Stderr, "timed out: %s\n", p.Format(c.String("format")))
+					if g.Verbose {
+						fmt.Fprintf(os.Stderr, "timed out: %s\n", p.Format(g.Format))
 					}
 				} else {
 					// output window info
-					if strings.Contains(c.String("target"), "w") {
+					if strings.Contains(g.Target, "w") {
 						for _, w := range wins {
 							if w.Process == nil || w.Process.ID != pid {
 								continue
@@ -491,17 +475,17 @@ func wait(c *cli.Context) error {
 								continue
 							}
 
-							if !c.Bool("last") {
-								fmt.Fprintf(os.Stdout, "%s\n", w.Format(c.String("format")))
+							if !g.Last {
+								fmt.Fprintf(os.Stdout, "%s\n", w.Format(g.Format))
 							}
 						}
 					}
 
 					// output process info
-					if strings.Contains(c.String("target"), "p") {
-						if !c.Bool("last") {
+					if strings.Contains(g.Target, "p") {
+						if !g.Last {
 							if testMatch(p.Name, names) {
-								fmt.Fprintf(os.Stdout, "%s\n", p.Format(c.String("format")))
+								fmt.Fprintf(os.Stdout, "%s\n", p.Format(g.Format))
 							}
 						}
 					}
@@ -513,7 +497,7 @@ func wait(c *cli.Context) error {
 	}
 	wg.Wait()
 
-	if c.Bool("last") {
+	if g.Last {
 		fmt.Fprintf(os.Stdout, "All processes exited: %q\n", names)
 	}
 
