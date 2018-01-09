@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"bitbucket.org/shu/gli"
+	"bitbucket.org/shu/rog"
 	"golang.org/x/sys/windows"
 	//"github.com/golang/sys/windows"
 )
@@ -38,6 +39,8 @@ var (
 
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	//-> use windows.XXX
+
+	verbose = rog.Discard
 )
 
 const (
@@ -370,8 +373,8 @@ func (g globalCmd) Run(args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to list windows (%q): %v", names, err)
 		}
-
 	}
+
 	if strings.Contains(g.Target, "p") {
 		procs, err = ListProcesses(names)
 		if err != nil {
@@ -400,25 +403,25 @@ func (g globalCmd) Run(args []string) error {
 	ignoredProcesseDict := ListParentProcesseDict(allProcs)
 
 	if g.Verbose {
-		fmt.Fprintf(os.Stderr, "%d Windows\n", len(wins))
-		fmt.Fprintf(os.Stderr, "%d Processes\n", len(procs))
+		verbose.Printf("%d Windows\n", len(wins))
+		verbose.Printf("%d Processes\n", len(procs))
 
-		fmt.Fprintf(os.Stderr, "target windows:\n")
+		verbose.Printf("target windows:\n")
 		for _, v := range wins {
-			fmt.Fprintf(os.Stderr, "  %s\n", v.Format(g.Format))
+			verbose.Printf("  %s\n", v.Format(g.Format))
 		}
-		fmt.Fprintf(os.Stderr, "target processes:\n")
+		verbose.Printf("target processes:\n")
 		for _, v := range procs {
-			fmt.Fprintf(os.Stderr, "  %s\n", v.Format(g.Format))
+			verbose.Printf("  %s\n", v.Format(g.Format))
 		}
 
-		fmt.Fprintf(os.Stderr, "ignored processes (%v):\n", uint32(syscall.Getpid()))
+		verbose.Printf("ignored processes (%v):\n", uint32(syscall.Getpid()))
 		for _, v := range ignoredProcesseDict {
-			fmt.Fprintf(os.Stderr, "  %s\n", v.Format(g.Format))
+			verbose.Printf("  %s\n", v.Format(g.Format))
 		}
 
 		if g.Last {
-			fmt.Fprintf(os.Stderr, "output to stdout is going to do at last\n")
+			verbose.Printf("output to stdout is going to do at last\n")
 		}
 	}
 
@@ -435,9 +438,7 @@ func (g globalCmd) Run(args []string) error {
 
 	wg := sync.WaitGroup{}
 	for pid, p := range targetProcessDict {
-		if g.Verbose {
-			fmt.Fprintf(os.Stderr, "waiting for %s\n", p.Format(g.Format))
-		}
+		verbose.Printf("waiting for %s\n", p.Format(g.Format))
 
 		wg.Add(1)
 		go func(pid uint32, p *Process) {
@@ -460,9 +461,7 @@ func (g globalCmd) Run(args []string) error {
 				windows.CloseHandle(hProcess)
 
 				if event == WAIT_TIMEOUT {
-					if g.Verbose {
-						fmt.Fprintf(os.Stderr, "timed out: %s\n", p.Format(g.Format))
-					}
+					verbose.Printf("timed out: %s\n", p.Format(g.Format))
 				} else {
 					// output window info
 					if strings.Contains(g.Target, "w") {
@@ -502,4 +501,10 @@ func (g globalCmd) Run(args []string) error {
 	}
 
 	return nil
+}
+
+func (g globalCmd) Before() {
+	if g.Verbose {
+		verbose = rog.New(os.Stderr, "", 0)
+	}
 }
