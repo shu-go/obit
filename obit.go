@@ -252,6 +252,11 @@ func waitForProcessEnd(hProcess windows.Handle, timeout int) (timedout bool) {
 func waitForWindowPopup(hWindow windows.Handle, timeout int) (timedout bool) {
 	e := elapsed.Start()
 	for {
+		b, _, _ := isWindow.Call(uintptr(hWindow))
+		if b == 0 {
+			return false
+		}
+
 		p, _, _ := getWindow.Call(uintptr(hWindow), winGWEnabledPopup)
 		if p != 0 && p != uintptr(hWindow) {
 			verbose.Printf("p=%v, hWindow=%v\n", p, hWindow)
