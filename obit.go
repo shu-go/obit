@@ -17,19 +17,18 @@ import (
 )
 
 type (
-	Process struct {
+	process struct {
 		ID       uint32
-		Name     string
 		ParentID uint32
+		Name     string
 	}
-	ProcessDict map[uint32]*Process // pid -> &Process{} of pid
+	processDict map[uint32]*process // pid -> &Process{} of pid
 
-	Window struct {
-		Process *Process
+	window struct {
+		Process *process
 		Title   string
 		Handle  windows.Handle
 	}
-	ProcessWndMap map[uint32][]*Window // pid -> &Window{}
 )
 
 var (
@@ -41,24 +40,19 @@ var (
 	getWindowTextLength      = user32.NewProc("GetWindowTextLengthW")
 	getWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 
-	kernel32 = syscall.NewLazyDLL("kernel32.dll")
-	//-> use windows.XXX
-
 	verbose = rog.Discard
 )
 
 const (
-	INFINITE     = 0xFFFFFFFF
-	SYNCHRONIZE  = 0x00100000
-	WAIT_TIMEOUT = 0x00000102
+	winInfinite    = 0xFFFFFFFF
+	winSynchronize = 0x00100000
+	winWaitTimeout = 0x00000102
 
-	TH32CS_SNAPPROCESS = 0x00000002
-
-	GW_ENABLEDPOPUP = 6
+	winGWEnabledPopup = 6
 )
 
-func ListWindows(names []string, allProcs ProcessDict) ([]*Window, error) {
-	var wins []*Window
+func listWindows(names []string, allProcs processDict) ([]*window, error) {
+	var wins []*window
 
 	cb := syscall.NewCallback(func(hwnd syscall.Handle, lparam uintptr) uintptr {
 		b, _, _ := isWindow.Call(uintptr(hwnd))
@@ -75,7 +69,7 @@ func ListWindows(names []string, allProcs ProcessDict) ([]*Window, error) {
 		getWindowText.Call(
 			uintptr(hwnd),
 			uintptr(unsafe.Pointer(&buff[0])),
-			uintptr(tlen),
+			tlen,
 		)
 		title := syscall.UTF16ToString(buff)
 
@@ -101,7 +95,7 @@ func ListWindows(names []string, allProcs ProcessDict) ([]*Window, error) {
 		if !found {
 			p = nil
 		}
-		wins = append(wins, &Window{Process: p, Title: title, Handle: windows.Handle(hwnd)})
+		wins = append(wins, &window{Process: p, Title: title, Handle: windows.Handle(hwnd)})
 
 		return 1
 	})
@@ -114,8 +108,8 @@ func ListWindows(names []string, allProcs ProcessDict) ([]*Window, error) {
 	return wins, nil
 }
 
-func MakeProcessDict(procs []*Process) ProcessDict {
-	dict := make(ProcessDict)
+func makeProcessDict(procs []*process) processDict {
+	dict := make(processDict)
 
 	for _, p := range procs {
 		dict[p.ID] = p
@@ -124,8 +118,8 @@ func MakeProcessDict(procs []*Process) ProcessDict {
 	return dict
 }
 
-func ListProcesses(names []string) ([]*Process, error) {
-	var procs []*Process
+func listProcesses(names []string) ([]*process, error) {
+	var procs []*process
 
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
@@ -138,7 +132,7 @@ func ListProcesses(names []string) ([]*Process, error) {
 		return nil, err
 	}
 	for {
-		p := &Process{ID: pe.ProcessID, ParentID: pe.ParentProcessID, Name: syscall.UTF16ToString(pe.ExeFile[:])}
+		p := &process{ID: pe.ProcessID, ParentID: pe.ParentProcessID, Name: syscall.UTF16ToString(pe.ExeFile[:])}
 
 		matches := false
 		if len(names) == 0 {
@@ -162,10 +156,10 @@ func ListProcesses(names []string) ([]*Process, error) {
 	return procs, nil
 }
 
-func ListParentProcesseDict(all ProcessDict) ProcessDict {
-	dict := make(ProcessDict)
+func listParentProcesseDict(all processDict) processDict {
+	dict := make(processDict)
 
-	var curr uint32 = uint32(syscall.Getpid())
+	var curr = uint32(syscall.Getpid())
 	for {
 		p, found := all[curr]
 		if !found {
@@ -188,7 +182,7 @@ func testMatch(tgt string, names []string) bool {
 	return false
 }
 
-func (w *Window) Format(format string) string {
+func (w *window) format(format string) string {
 	output := format
 	if w.Process == nil {
 		output = strings.Replace(output, "{PID}", "", -1)
@@ -201,7 +195,7 @@ func (w *Window) Format(format string) string {
 	return output
 }
 
-func (p *Process) Format(format string) string {
+func (p *process) Format(format string) string {
 	output := format
 	output = strings.Replace(output, "{PID}", fmt.Sprintf("%d", p.ID), -1)
 	output = strings.Replace(output, "{PROCESS}", p.Name, -1)
@@ -224,156 +218,41 @@ func main() {
 }
 
 type globalCmd struct {
-	Verbose bool `help:"verbose output to stderr"`
-
-	Target string `cli:"target, t"  default:"wp"  help:"target: 'w' for windows, 'p' for processes"`
-	Format string `cli:"format, f"  default:"{TITLE}({PROCESS})"  help:"format of stdout"`
-
 	Popup bool `help:"do not wait for obituary, but do for the window have a popup window"`
 
-	Timeout int  `default:"-1"  help:"timeout in milliseconds (negative is INFINITE)"`
-	Last    bool `cli:"last, l"  help:"output to stdout only when all processes exit, without process info"`
+	Target string `cli:"target, t"  default:"wp"  help:"target: 'w' for windows, 'p' for processes"`
+	Last   bool   `cli:"last, l"  help:"output to stdout only when all processes exit, without process info"`
+
+	Timeout int `default:"-1"  help:"timeout in milliseconds (negative is INFINITE)"`
+
+	Format string `cli:"format, f"  default:"{TITLE}({PROCESS})"  help:"format of stdout"`
+
+	Verbose bool `help:"verbose output to stderr"`
 }
 
-/*
-func list(c *cli.Context) error {
-	var wins []*Window
-	var procs []*Process
-	var err error
-
-	names := c.Args()
-	if len(names) == 0 {
-		names = nil
+func (g *globalCmd) Init() {
+	if g.Timeout == -1 {
+		g.Timeout = winInfinite
 	}
-
-	var procDict ProcessDict
-	{
-		allProcs, err := ListProcesses(nil)
-		if err != nil {
-			return fmt.Errorf("failed to list processes: %v", err)
-		}
-		procDict = MakeProcessDict(allProcs)
-	}
-
-	if strings.Contains(g.Target, "w") {
-		wins, err = ListWindows(names, procDict)
-		if err != nil {
-			return fmt.Errorf("failed to list windows (%q): %v", names, err)
-		}
-		///log.Printf("%#v", wins)
-		sort.Slice(wins, func(i, j int) bool {
-			// sort by Process.Name, Title
-			w1 := wins[i]
-			w2 := wins[j]
-			if w1.Process == nil {
-				return true
-			} else if w2.Process == nil {
-				return false
-			} else if w1.Process.Name < w2.Process.Name {
-				return true
-			} else if w1.Process.Name > w2.Process.Name {
-				return false
-			} else {
-				return w1.Title < w2.Title
-			}
-		})
-
-	}
-	if strings.Contains(g.Target, "p") {
-		procs, err = ListProcesses(names)
-		if err != nil {
-			return fmt.Errorf("failed to list processes: %v", err)
-		}
-		sort.Slice(procs, func(i, j int) bool {
-			// sort by Name
-			return procs[i].Name < procs[j].Name
-		})
-	}
-
-	if len(wins)+len(procs) == 0 {
-		if g.Verbose {
-			fmt.Printf("no result for %q\n", names)
-		}
-		return nil
-	}
-
-	// output merging wins and procs
-	var wi int
-	var pi int
-	for {
-		if wi >= len(wins) && pi >= len(procs) {
-			break
-		}
-
-		// proc1
-		// proc1 window1
-		// proc1 window2
-		// proc2 window1
-		// proc3
-
-		var win *Window
-		if wi < len(wins) {
-			win = wins[wi]
-		}
-		var proc *Process
-		if pi < len(procs) {
-			proc = procs[pi]
-		}
-
-		procOutput := true // false for window output
-
-		if proc != nil {
-			if win == nil || win.Process == nil {
-				procOutput = true
-			} else {
-				if proc.Name <= win.Process.Name {
-					procOutput = true
-				} else {
-					procOutput = false
-				}
-			}
-		} else {
-			procOutput = false
-		}
-
-		if procOutput && proc == nil || !procOutput && win == nil {
-			break
-		}
-
-		var output string
-		///log.Printf("%v for %#v", procOutput, win)
-		if procOutput {
-			output = proc.Format(g.Format)
-			pi++
-		} else {
-			output = win.Format(g.Format)
-			wi++
-		}
-
-		fmt.Printf("%s\n", output)
-	}
-
-	return nil
 }
-*/
 
 // this func does not close hProcess
 func waitForProcessEnd(hProcess windows.Handle, timeout int) (timedout bool) {
-	event, _ := windows.WaitForSingleObject(
+	event, err := windows.WaitForSingleObject(
 		hProcess,
 		uint32(timeout),
 	)
-
-	if event == WAIT_TIMEOUT {
-		return true
+	if err != nil {
+		return false
 	}
-	return false
+
+	return event == winWaitTimeout
 }
 
 func waitForWindowPopup(hWindow windows.Handle, timeout int) (timedout bool) {
 	e := elapsed.Start()
 	for {
-		p, _, _ := getWindow.Call(uintptr(hWindow), GW_ENABLEDPOPUP)
+		p, _, _ := getWindow.Call(uintptr(hWindow), winGWEnabledPopup)
 		if p != 0 && p != uintptr(hWindow) {
 			verbose.Printf("p=%v, hWindow=%v\n", p, hWindow)
 			break
@@ -390,8 +269,8 @@ func waitForWindowPopup(hWindow windows.Handle, timeout int) (timedout bool) {
 }
 
 func (g globalCmd) Run(args []string) error {
-	var wins []*Window
-	var procs []*Process
+	var wins []*window
+	var procs []*process
 	var err error
 
 	names := args
@@ -399,24 +278,24 @@ func (g globalCmd) Run(args []string) error {
 		names = nil
 	}
 
-	var allProcs ProcessDict
+	var allProcs processDict
 	{
-		a, err := ListProcesses(nil)
-		if err != nil {
-			return fmt.Errorf("failed to list processes: %v", err)
+		a, aerr := listProcesses(nil)
+		if aerr != nil {
+			return fmt.Errorf("failed to list processes: %v", aerr)
 		}
-		allProcs = MakeProcessDict(a)
+		allProcs = makeProcessDict(a)
 	}
 
 	if strings.Contains(g.Target, "w") {
-		wins, err = ListWindows(names, allProcs)
+		wins, err = listWindows(names, allProcs)
 		if err != nil {
 			return fmt.Errorf("failed to list windows (%q): %v", names, err)
 		}
 	}
 
 	if strings.Contains(g.Target, "p") {
-		procs, err = ListProcesses(names)
+		procs, err = listProcesses(names)
 		if err != nil {
 			return fmt.Errorf("failed to list processes: %v", err)
 		}
@@ -429,7 +308,7 @@ func (g globalCmd) Run(args []string) error {
 		return nil
 	}
 
-	targetProcessDict := make(ProcessDict)
+	targetProcessDict := make(processDict)
 	for _, p := range procs {
 		targetProcessDict[p.ID] = p
 	}
@@ -440,7 +319,7 @@ func (g globalCmd) Run(args []string) error {
 		targetProcessDict[w.Process.ID] = w.Process
 	}
 
-	ignoredProcesseDict := ListParentProcesseDict(allProcs)
+	ignoredProcesseDict := listParentProcesseDict(allProcs)
 
 	if g.Verbose {
 		verbose.Printf("%d Windows\n", len(wins))
@@ -448,7 +327,7 @@ func (g globalCmd) Run(args []string) error {
 
 		verbose.Printf("target windows:\n")
 		for _, v := range wins {
-			verbose.Printf("  %s\n", v.Format(g.Format))
+			verbose.Printf("  %s\n", v.format(g.Format))
 		}
 		verbose.Printf("target processes:\n")
 		for _, v := range procs {
@@ -465,7 +344,7 @@ func (g globalCmd) Run(args []string) error {
 		}
 	}
 
-	for k, _ := range ignoredProcesseDict {
+	for k := range ignoredProcesseDict {
 		delete(targetProcessDict, k)
 	}
 
@@ -483,15 +362,15 @@ func (g globalCmd) Run(args []string) error {
 
 }
 
-func (g globalCmd) runProcessWait(targetProcessDict ProcessDict, wins []*Window, names []string) error {
+func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window, names []string) error {
 	wg := sync.WaitGroup{}
 	for pid, p := range targetProcessDict {
 		verbose.Printf("waiting for %s\n", p.Format(g.Format))
 
 		wg.Add(1)
-		go func(pid uint32, p *Process) {
+		go func(pid uint32, p *process) {
 			hProcess, err := windows.OpenProcess(
-				SYNCHRONIZE,
+				winSynchronize,
 				false,
 				pid,
 			)
@@ -520,7 +399,7 @@ func (g globalCmd) runProcessWait(targetProcessDict ProcessDict, wins []*Window,
 							}
 
 							if !g.Last {
-								fmt.Fprintf(os.Stdout, "%s\n", w.Format(g.Format))
+								fmt.Fprintf(os.Stdout, "%s\n", w.format(g.Format))
 							}
 						}
 					}
@@ -548,13 +427,13 @@ func (g globalCmd) runProcessWait(targetProcessDict ProcessDict, wins []*Window,
 	return nil
 }
 
-func (g globalCmd) runPopupWait(wins []*Window, names []string) error {
+func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 	anyendChan := make(chan struct{})
 
 	for _, w := range wins {
-		verbose.Printf("waiting for %s have popup\n", w.Format(g.Format))
+		verbose.Printf("waiting for %s have popup\n", w.format(g.Format))
 
-		go func(win *Window) {
+		go func(win *window) {
 			waitForWindowPopup(win.Handle, -1)
 			anyendChan <- struct{}{}
 		}(w)
