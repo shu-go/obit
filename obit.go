@@ -6,8 +6,10 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
+	"bitbucket.org/shu/elapsed"
 	"bitbucket.org/shu/gli"
 	"bitbucket.org/shu/rog"
 	"golang.org/x/sys/windows"
@@ -25,12 +27,14 @@ type (
 	Window struct {
 		Process *Process
 		Title   string
+		Handle  windows.Handle
 	}
 	ProcessWndMap map[uint32][]*Window // pid -> &Window{}
 )
 
 var (
 	user32                   = syscall.NewLazyDLL("user32.dll")
+	getWindow                = user32.NewProc("GetWindow")
 	isWindow                 = user32.NewProc("IsWindow")
 	enumWindows              = user32.NewProc("EnumWindows")
 	getWindowText            = user32.NewProc("GetWindowTextW")
@@ -49,6 +53,8 @@ const (
 	WAIT_TIMEOUT = 0x00000102
 
 	TH32CS_SNAPPROCESS = 0x00000002
+
+	GW_ENABLEDPOPUP = 6
 )
 
 func ListWindows(names []string, allProcs ProcessDict) ([]*Window, error) {
@@ -95,7 +101,7 @@ func ListWindows(names []string, allProcs ProcessDict) ([]*Window, error) {
 		if !found {
 			p = nil
 		}
-		wins = append(wins, &Window{Process: p, Title: title})
+		wins = append(wins, &Window{Process: p, Title: title, Handle: windows.Handle(hwnd)})
 
 		return 1
 	})
@@ -223,6 +229,8 @@ type globalCmd struct {
 	Target string `cli:"target, t"  default:"wp"  help:"target: 'w' for windows, 'p' for processes"`
 	Format string `cli:"format, f"  default:"{TITLE}({PROCESS})"  help:"format of stdout"`
 
+	Popup bool `help:"do not wait for obituary, but do for the window have a popup window"`
+
 	Timeout int  `default:"-1"  help:"timeout in milliseconds (negative is INFINITE)"`
 	Last    bool `cli:"last, l"  help:"output to stdout only when all processes exit, without process info"`
 }
@@ -349,6 +357,38 @@ func list(c *cli.Context) error {
 }
 */
 
+// this func does not close hProcess
+func waitForProcessEnd(hProcess windows.Handle, timeout int) (timedout bool) {
+	event, _ := windows.WaitForSingleObject(
+		hProcess,
+		uint32(timeout),
+	)
+
+	if event == WAIT_TIMEOUT {
+		return true
+	}
+	return false
+}
+
+func waitForWindowPopup(hWindow windows.Handle, timeout int) (timedout bool) {
+	e := elapsed.Start()
+	for {
+		p, _, _ := getWindow.Call(uintptr(hWindow), GW_ENABLEDPOPUP)
+		if p != 0 && p != uintptr(hWindow) {
+			verbose.Printf("p=%v, hWindow=%v\n", p, hWindow)
+			break
+		}
+
+		if timeout > 0 && timeout < int(e.Elapsed()) {
+			return true
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	return false
+}
+
 func (g globalCmd) Run(args []string) error {
 	var wins []*Window
 	var procs []*Process
@@ -436,6 +476,14 @@ func (g globalCmd) Run(args []string) error {
 		return nil
 	}
 
+	if g.Popup {
+		return g.runPopupWait(wins, names)
+	}
+	return g.runProcessWait(targetProcessDict, wins, names)
+
+}
+
+func (g globalCmd) runProcessWait(targetProcessDict ProcessDict, wins []*Window, names []string) error {
 	wg := sync.WaitGroup{}
 	for pid, p := range targetProcessDict {
 		verbose.Printf("waiting for %s\n", p.Format(g.Format))
@@ -454,13 +502,10 @@ func (g globalCmd) Run(args []string) error {
 				return
 			}
 			if hProcess != 0 {
-				event, _ := windows.WaitForSingleObject(
-					hProcess,
-					uint32(g.Timeout),
-				)
+				timedout := waitForProcessEnd(hProcess, g.Timeout)
 				windows.CloseHandle(hProcess)
 
-				if event == WAIT_TIMEOUT {
+				if timedout {
 					verbose.Printf("timed out: %s\n", p.Format(g.Format))
 				} else {
 					// output window info
@@ -499,6 +544,23 @@ func (g globalCmd) Run(args []string) error {
 	if g.Last {
 		fmt.Fprintf(os.Stdout, "All processes exited: %q\n", names)
 	}
+
+	return nil
+}
+
+func (g globalCmd) runPopupWait(wins []*Window, names []string) error {
+	anyendChan := make(chan struct{})
+
+	for _, w := range wins {
+		verbose.Printf("waiting for %s have popup\n", w.Format(g.Format))
+
+		go func(win *Window) {
+			waitForWindowPopup(win.Handle, -1)
+			anyendChan <- struct{}{}
+		}(w)
+	}
+
+	<-anyendChan
 
 	return nil
 }
