@@ -9,6 +9,7 @@ import (
 	"time"
 	"unsafe"
 
+	"bitbucket.org/shu/clise"
 	"bitbucket.org/shu/elapsed"
 	"bitbucket.org/shu/gli"
 	"bitbucket.org/shu/rog"
@@ -41,6 +42,8 @@ var (
 	getWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 
 	verbose = rog.Discard
+	stdout  = rog.New(os.Stdout, "", 0)
+	stderr  = rog.New(os.Stderr, "", 0)
 )
 
 const (
@@ -326,38 +329,52 @@ func (g globalCmd) Run(args []string) error {
 
 	ignoredProcesseDict := listParentProcesseDict(allProcs)
 
-	if g.Verbose {
-		verbose.Printf("%d Windows\n", len(wins))
-		verbose.Printf("%d Processes\n", len(procs))
-
-		verbose.Printf("target windows:\n")
-		for _, v := range wins {
-			verbose.Printf("  %s\n", v.format(g.Format))
-		}
-		verbose.Printf("target processes:\n")
-		for _, v := range procs {
-			verbose.Printf("  %s\n", v.Format(g.Format))
-		}
-
-		verbose.Printf("ignored processes (%v):\n", uint32(syscall.Getpid()))
-		for _, v := range ignoredProcesseDict {
-			verbose.Printf("  %s\n", v.Format(g.Format))
-		}
-
-		if g.Last {
-			verbose.Printf("output to stdout is going to do at last\n")
-		}
-	}
-
 	for k := range ignoredProcesseDict {
 		delete(targetProcessDict, k)
 	}
+	clise.Filter(&procs, func(i int) bool {
+		id := procs[i].ID
+		_, found := ignoredProcesseDict[id]
+		return !found
+	})
+	clise.Filter(&wins, func(i int) bool {
+		id := wins[i].Process.ID
+		_, found := ignoredProcesseDict[id]
+		return !found
+	})
 
 	if len(targetProcessDict) == 0 {
 		if g.Verbose {
 			fmt.Printf("no result for %q\n", names)
 		}
 		return nil
+	}
+
+	if g.Verbose {
+		verbose.Printf("%d Windows\n", len(wins))
+		if len(wins) != 0 {
+			for _, v := range wins {
+				verbose.Printf("    %s\n", v.format(g.Format))
+			}
+		}
+
+		verbose.Printf("%d Processes\n", len(procs))
+		if len(procs) != 0 {
+			for _, v := range procs {
+				verbose.Printf("    %s\n", v.Format(g.Format))
+			}
+		}
+
+		/*
+			verbose.Printf("ignored processes (%v):\n", uint32(syscall.Getpid()))
+			for _, v := range ignoredProcesseDict {
+				verbose.Printf("  %s\n", v.Format(g.Format))
+			}
+		*/
+
+		if g.Last {
+			verbose.Printf("output to stdout is going to do at last\n")
+		}
 	}
 
 	if g.Popup {
@@ -382,7 +399,7 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 			if err != nil {
 				//continue
 				wg.Done()
-				fmt.Fprintf(os.Stderr, "failed to wait for %v: %v\n", p.Format(g.Format), err)
+				stderr.Printf("failed to wait for %v: %v\n", p.Format(g.Format), err)
 				return
 			}
 			if hProcess != 0 {
@@ -404,7 +421,7 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 							}
 
 							if !g.Last {
-								fmt.Fprintf(os.Stdout, "%s\n", w.format(g.Format))
+								stdout.Printf("%s\n", w.format(g.Format))
 							}
 						}
 					}
@@ -413,7 +430,7 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 					if strings.Contains(g.Target, "p") {
 						if !g.Last {
 							if testMatch(p.Name, names) {
-								fmt.Fprintf(os.Stdout, "%s\n", p.Format(g.Format))
+								stdout.Printf("%s\n", p.Format(g.Format))
 							}
 						}
 					}
@@ -426,7 +443,7 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 	wg.Wait()
 
 	if g.Last {
-		fmt.Fprintf(os.Stdout, "All processes exited: %q\n", names)
+		stdout.Printf("All processes exited: %q\n", names)
 	}
 
 	return nil
