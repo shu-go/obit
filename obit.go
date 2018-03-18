@@ -47,7 +47,7 @@ var (
 )
 
 const (
-	winInfinite    = 0xFFFFFFFF
+	//winInfinite    = 0xFFFFFFFF
 	winSynchronize = 0x00100000
 	winWaitTimeout = 0x00000102
 
@@ -233,12 +233,6 @@ type globalCmd struct {
 	Verbose bool `help:"verbose output to stderr"`
 }
 
-func (g *globalCmd) Init() {
-	if g.Timeout == -1 {
-		g.Timeout = winInfinite
-	}
-}
-
 // this func does not close hProcess
 func waitForProcessEnd(hProcess windows.Handle, timeout int) (timedout bool) {
 	event, err := windows.WaitForSingleObject(
@@ -266,7 +260,8 @@ func waitForWindowPopup(hWindow windows.Handle, timeout int) (timedout bool) {
 			break
 		}
 
-		if timeout > 0 && timeout < int(e.Elapsed()) {
+		el := e.ElapsedMilliseconds()
+		if timeout > 0 && timeout < int(el) {
 			return true
 		}
 
@@ -281,6 +276,12 @@ func (g globalCmd) Run(args []string) error {
 	var procs []*process
 	var err error
 
+	if g.Timeout < 0 {
+		g.Timeout = -1
+	} else {
+		g.Timeout *= 1000 // s -> ms
+	}
+
 	names := args
 	if len(names) == 0 {
 		return fmt.Errorf("specify window title or process name, waited for its end")
@@ -293,6 +294,10 @@ func (g globalCmd) Run(args []string) error {
 			return fmt.Errorf("failed to list processes: %v", aerr)
 		}
 		allProcs = makeProcessDict(a)
+	}
+
+	if g.Popup {
+		g.Target = "w"
 	}
 
 	if strings.Contains(g.Target, "w") {
@@ -456,7 +461,8 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 		verbose.Printf("waiting for %s have popup\n", w.format(g.Format))
 
 		go func(win *window) {
-			waitForWindowPopup(win.Handle, -1)
+			waitForWindowPopup(win.Handle, g.Timeout)
+			stdout.Printf("%v\n", win.format(g.Format))
 			anyendChan <- struct{}{}
 		}(w)
 	}
