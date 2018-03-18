@@ -283,7 +283,7 @@ func (g globalCmd) Run(args []string) error {
 
 	names := args
 	if len(names) == 0 {
-		names = nil
+		return fmt.Errorf("specify window title or process name, waited for its end")
 	}
 
 	var allProcs processDict
