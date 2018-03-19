@@ -222,9 +222,10 @@ func main() {
 
 type globalCmd struct {
 	Popup bool `help:"do not wait for obituary, but do for the window have a popup window"`
+	Once  bool `help:"obit outputs and exits when the first processe exits/popped-up"`
 
 	Target string `cli:"target, t"  default:"wp"  help:"target: 'w' for windows, 'p' for processes"`
-	Last   bool   `cli:"last, l"  help:"output to stdout only when all processes exit, without process info"`
+	Last   bool   `cli:"last, l"  help:"obit outputs and exits only when all processes exit, without process info"`
 
 	Timeout int `default:"-1"  help:"timeout in milliseconds (negative is INFINITE)"`
 
@@ -233,17 +234,35 @@ type globalCmd struct {
 	Verbose bool `help:"verbose output to stderr"`
 }
 
-// this func does not close hProcess
-func waitForProcessEnd(hProcess windows.Handle, timeout int) (timedout bool) {
-	event, err := windows.WaitForSingleObject(
-		hProcess,
-		uint32(timeout),
-	)
+func waitForProcessEnd(pid uint32, cancelChan chan struct{}) (timedout bool) {
+	hProcess, err := windows.OpenProcess(winSynchronize, false, pid)
 	if err != nil {
+		// no need to wait for it
 		return false
 	}
+	if hProcess != 0 {
+		defer windows.CloseHandle(hProcess)
+	}
 
-	return event == winWaitTimeout
+	for {
+		event, err := windows.WaitForSingleObject(hProcess, 20) // wait 20ms every time
+		if err != nil {
+			// no need to wait for it
+			return false
+		}
+
+		// process existed
+		if event != winWaitTimeout {
+			return false
+		}
+
+		// timed out?
+		select {
+		case <-cancelChan:
+			return true
+		default:
+		}
+	}
 }
 
 func waitForWindowPopup(hWindow windows.Handle, timeout int) (timedout bool) {
@@ -280,6 +299,10 @@ func (g globalCmd) Run(args []string) error {
 		g.Timeout = -1
 	} else {
 		g.Timeout *= 1000 // s -> ms
+	}
+
+	if g.Last && g.Once {
+		return fmt.Errorf("not both --last and --once")
 	}
 
 	names := args
@@ -391,64 +414,85 @@ func (g globalCmd) Run(args []string) error {
 
 func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window, names []string) error {
 	wg := sync.WaitGroup{}
+	outputOnce := sync.Once{}
+	cancelOnce := sync.Once{}
+	cancelChan := make(chan struct{})
+	anyTimedOut := false
+
 	for pid, p := range targetProcessDict {
 		verbose.Printf("waiting for %s\n", p.Format(g.Format))
 
 		wg.Add(1)
 		go func(pid uint32, p *process) {
-			hProcess, err := windows.OpenProcess(
-				winSynchronize,
-				false,
-				pid,
-			)
-			if err != nil {
-				//continue
-				wg.Done()
-				stderr.Printf("failed to wait for %v: %v\n", p.Format(g.Format), err)
-				return
-			}
-			if hProcess != 0 {
-				timedout := waitForProcessEnd(hProcess, g.Timeout)
-				windows.CloseHandle(hProcess)
+			defer wg.Done()
 
-				if timedout {
-					verbose.Printf("timed out: %s\n", p.Format(g.Format))
-				} else {
-					// output window info
-					if strings.Contains(g.Target, "w") {
-						for _, w := range wins {
-							if w.Process == nil || w.Process.ID != pid {
-								continue
-							}
+			timedout := waitForProcessEnd(pid, cancelChan)
 
-							if !testMatch(w.Title, names) {
-								continue
-							}
-
-							if !g.Last {
-								stdout.Printf("%s\n", w.format(g.Format))
-							}
+			if timedout {
+				anyTimedOut = true
+				if !g.Once {
+					stdout.Printf("timed out: %s\n", p.Format(g.Format))
+				}
+			} else if !g.Last {
+				// output window info
+				if strings.Contains(g.Target, "w") {
+					for _, w := range wins {
+						if w.Process == nil || w.Process.ID != pid {
+							continue
 						}
-					}
 
-					// output process info
-					if strings.Contains(g.Target, "p") {
-						if !g.Last {
-							if testMatch(p.Name, names) {
-								stdout.Printf("%s\n", p.Format(g.Format))
-							}
+						if !testMatch(w.Title, names) {
+							continue
+						}
+
+						if g.Once {
+							outputOnce.Do(func() {
+								stdout.Printf("%s\n", w.format(g.Format))
+							})
+						} else {
+							stdout.Printf("%s\n", w.format(g.Format))
 						}
 					}
 				}
 
-				wg.Done()
+				// output process info
+				if strings.Contains(g.Target, "p") {
+					if testMatch(p.Name, names) {
+						if g.Once {
+							outputOnce.Do(func() {
+								stdout.Printf("%s\n", p.Format(g.Format))
+							})
+						} else {
+							stdout.Printf("%s\n", p.Format(g.Format))
+						}
+					}
+				}
+			}
+
+			if g.Once {
+				cancelOnce.Do(func() {
+					close(cancelChan)
+				})
 			}
 		}(pid, p)
 	}
+
+	if g.Timeout > 0 {
+		time.After(g.Timeout*time.Millisecond, func() {
+			cancelOnce.Do(func() {
+				close(cancelChan)
+			})
+		})
+	}
+
 	wg.Wait()
 
 	if g.Last {
-		stdout.Printf("All processes exited: %q\n", names)
+		if anyTimedOut {
+			stdout.Printf("Some processes timed out: %q\n", names)
+		} else {
+			stdout.Printf("All processes exited: %q\n", names)
+		}
 	}
 
 	return nil
