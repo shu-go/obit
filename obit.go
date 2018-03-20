@@ -10,7 +10,6 @@ import (
 	"unsafe"
 
 	"bitbucket.org/shu/clise"
-	"bitbucket.org/shu/elapsed"
 	"bitbucket.org/shu/gli"
 	"bitbucket.org/shu/rog"
 	"golang.org/x/sys/windows"
@@ -221,11 +220,11 @@ func main() {
 }
 
 type globalCmd struct {
-	Popup bool `help:"do not wait for obituary, but do for the window have a popup window"`
-	Once  bool `help:"obit outputs and exits when the first processe exits/popped-up"`
+	Popup bool `help:"wait for the window have a popup window or exited, and exit"`
+	Once  bool `help:"output and exit when the first processe exits/popped-up"`
 
 	Target string `cli:"target, t"  default:"wp"  help:"target: 'w' for windows, 'p' for processes"`
-	Last   bool   `cli:"last, l"  help:"obit outputs and exits only when all processes exit, without process info"`
+	Last   bool   `cli:"last, l"  help:"output and exit only when all processes exit, without process info"`
 
 	Timeout int `default:"-1"  help:"timeout in milliseconds (negative is INFINITE)"`
 
@@ -234,11 +233,11 @@ type globalCmd struct {
 	Verbose bool `help:"verbose output to stderr"`
 }
 
-func waitForProcessEnd(pid uint32, cancelChan chan struct{}) (timedout bool) {
+func waitForProcessEnd(pid uint32, cancelChan chan struct{}) {
 	hProcess, err := windows.OpenProcess(winSynchronize, false, pid)
 	if err != nil {
 		// no need to wait for it
-		return false
+		return
 	}
 	if hProcess != 0 {
 		defer windows.CloseHandle(hProcess)
@@ -248,46 +247,44 @@ func waitForProcessEnd(pid uint32, cancelChan chan struct{}) (timedout bool) {
 		event, err := windows.WaitForSingleObject(hProcess, 20) // wait 20ms every time
 		if err != nil {
 			// no need to wait for it
-			return false
+			return
 		}
 
 		// process existed
 		if event != winWaitTimeout {
-			return false
+			return
 		}
 
 		// timed out?
 		select {
 		case <-cancelChan:
-			return true
+			return
 		default:
 		}
 	}
 }
 
-func waitForWindowPopup(hWindow windows.Handle, timeout int) (timedout bool) {
-	e := elapsed.Start()
+func waitForWindowPopup(hWindow windows.Handle, cancelChan chan struct{}) {
 	for {
 		b, _, _ := isWindow.Call(uintptr(hWindow))
 		if b == 0 {
-			return false
+			return
 		}
 
 		p, _, _ := getWindow.Call(uintptr(hWindow), winGWEnabledPopup)
 		if p != 0 && p != uintptr(hWindow) {
-			verbose.Printf("p=%v, hWindow=%v\n", p, hWindow)
 			break
 		}
 
-		el := e.ElapsedMilliseconds()
-		if timeout > 0 && timeout < int(el) {
-			return true
+		// timed out?
+		select {
+		case <-cancelChan:
+			return
+		default:
 		}
 
 		time.Sleep(20 * time.Millisecond)
 	}
-
-	return false
 }
 
 func (g globalCmd) Run(args []string) error {
@@ -393,13 +390,6 @@ func (g globalCmd) Run(args []string) error {
 			}
 		}
 
-		/*
-			verbose.Printf("ignored processes (%v):\n", uint32(syscall.Getpid()))
-			for _, v := range ignoredProcesseDict {
-				verbose.Printf("  %s\n", v.Format(g.Format))
-			}
-		*/
-
 		if g.Last {
 			verbose.Printf("output to stdout is going to do at last\n")
 		}
@@ -414,10 +404,12 @@ func (g globalCmd) Run(args []string) error {
 
 func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window, names []string) error {
 	wg := sync.WaitGroup{}
+
 	outputOnce := sync.Once{}
+
 	cancelOnce := sync.Once{}
-	cancelChan := make(chan struct{})
-	anyTimedOut := false
+	doneChan := make(chan struct{})
+	timedOut := false
 
 	for pid, p := range targetProcessDict {
 		verbose.Printf("waiting for %s\n", p.Format(g.Format))
@@ -426,92 +418,131 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 		go func(pid uint32, p *process) {
 			defer wg.Done()
 
-			timedout := waitForProcessEnd(pid, cancelChan)
+			waitForProcessEnd(pid, doneChan)
 
-			if timedout {
-				anyTimedOut = true
-				if !g.Once {
-					stdout.Printf("timed out: %s\n", p.Format(g.Format))
-				}
-			} else if !g.Last {
-				// output window info
-				if strings.Contains(g.Target, "w") {
-					for _, w := range wins {
-						if w.Process == nil || w.Process.ID != pid {
-							continue
-						}
+			if g.Last {
+				return
+			}
 
-						if !testMatch(w.Title, names) {
-							continue
-						}
+			// output window info
+			if strings.Contains(g.Target, "w") {
+				// find windows by process
+				ww := clise.CopyFiltered(wins, func(i int) bool {
+					w := wins[i]
+					return w.Process != nil && w.Process.ID == pid && testMatch(w.Title, names)
+				}).([]*window)
 
-						if g.Once {
-							outputOnce.Do(func() {
-								stdout.Printf("%s\n", w.format(g.Format))
-							})
-						} else {
+				for _, w := range ww {
+					if g.Once {
+						outputOnce.Do(func() {
 							stdout.Printf("%s\n", w.format(g.Format))
-						}
+						})
+					} else {
+						stdout.Printf("%s\n", w.format(g.Format))
 					}
 				}
-
-				// output process info
-				if strings.Contains(g.Target, "p") {
-					if testMatch(p.Name, names) {
-						if g.Once {
-							outputOnce.Do(func() {
-								stdout.Printf("%s\n", p.Format(g.Format))
-							})
-						} else {
+			}
+			if strings.Contains(g.Target, "p") {
+				if testMatch(p.Name, names) {
+					if g.Once {
+						outputOnce.Do(func() {
 							stdout.Printf("%s\n", p.Format(g.Format))
-						}
+						})
+					} else {
+						stdout.Printf("%s\n", p.Format(g.Format))
 					}
 				}
 			}
 
 			if g.Once {
 				cancelOnce.Do(func() {
-					close(cancelChan)
+					close(doneChan)
 				})
 			}
 		}(pid, p)
 	}
 
+	allDoneChan := make(chan struct{})
+	go func() {
+		wg.Wait()
+		allDoneChan <- struct{}{}
+	}()
+
+	var timeoutChan <-chan time.Time
 	if g.Timeout > 0 {
-		time.After(g.Timeout*time.Millisecond, func() {
-			cancelOnce.Do(func() {
-				close(cancelChan)
-			})
+		timeoutChan = time.After(time.Duration(g.Timeout) * time.Millisecond)
+	}
+
+	select {
+	case <-allDoneChan:
+		// nop but wait
+	case <-timeoutChan:
+		timedOut = true
+		cancelOnce.Do(func() {
+			close(doneChan)
 		})
 	}
 
-	wg.Wait()
-
-	if g.Last {
-		if anyTimedOut {
-			stdout.Printf("Some processes timed out: %q\n", names)
-		} else {
-			stdout.Printf("All processes exited: %q\n", names)
-		}
+	if timedOut {
+		stdout.Printf("Some processes timed out.\n")
+	} else if g.Last {
+		stdout.Printf("All processes exited: %q\n", names)
 	}
 
 	return nil
 }
 
 func (g globalCmd) runPopupWait(wins []*window, names []string) error {
-	anyendChan := make(chan struct{})
+	wg := sync.WaitGroup{}
+
+	outputOnce := sync.Once{}
+
+	cancelOnce := sync.Once{}
+	doneChan := make(chan struct{})
+	timedOut := false
 
 	for _, w := range wins {
 		verbose.Printf("waiting for %s have popup\n", w.format(g.Format))
 
+		wg.Add(1)
 		go func(win *window) {
-			waitForWindowPopup(win.Handle, g.Timeout)
-			stdout.Printf("%v\n", win.format(g.Format))
-			anyendChan <- struct{}{}
+			defer wg.Done()
+
+			waitForWindowPopup(win.Handle, doneChan)
+
+			outputOnce.Do(func() {
+				stdout.Printf("%v\n", win.format(g.Format))
+			})
+			cancelOnce.Do(func() {
+				close(doneChan)
+			})
 		}(w)
 	}
 
-	<-anyendChan
+	allDoneChan := make(chan struct{})
+	go func() {
+		wg.Wait()
+		allDoneChan <- struct{}{}
+	}()
+
+	var timeoutChan <-chan time.Time
+	if g.Timeout > 0 {
+		timeoutChan = time.After(time.Duration(g.Timeout) * time.Millisecond)
+	}
+
+	select {
+	case <-allDoneChan:
+		// nop but wait
+	case <-timeoutChan:
+		timedOut = true
+		cancelOnce.Do(func() {
+			close(doneChan)
+		})
+	}
+
+	if timedOut {
+		stdout.Printf("Some processes timed out.\n")
+	}
 
 	return nil
 }
