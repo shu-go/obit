@@ -210,7 +210,7 @@ func main() {
 	app := gli.New(&globalCmd{})
 	app.Name = "obit"
 	app.Desc = "obituary notifier via stdout"
-	app.Version = "0.3.0"
+	app.Version = "0.3.1"
 	app.Usage = `obit [--popup] {window title or process name, waited for its end}`
 	app.Copyright = "(C) 2017 Shuhei Kubota"
 
