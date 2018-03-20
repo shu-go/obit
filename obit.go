@@ -11,6 +11,7 @@ import (
 
 	"bitbucket.org/shu/clise"
 	"bitbucket.org/shu/gli"
+	"bitbucket.org/shu/gorou"
 	"bitbucket.org/shu/rog"
 	"golang.org/x/sys/windows"
 	//"github.com/golang/sys/windows"
@@ -42,7 +43,7 @@ var (
 
 	verbose = rog.Discard
 	stdout  = rog.New(os.Stdout, "", 0)
-	stderr  = rog.New(os.Stderr, "", 0)
+	//stderr  = rog.New(os.Stderr, "", 0)
 )
 
 const (
@@ -233,7 +234,7 @@ type globalCmd struct {
 	Verbose bool `help:"verbose output to stderr"`
 }
 
-func waitForProcessEnd(pid uint32, cancelChan chan struct{}) {
+func waitForProcessEnd(pid uint32, cancelled gorou.Cancelled) {
 	hProcess, err := windows.OpenProcess(winSynchronize, false, pid)
 	if err != nil {
 		// no need to wait for it
@@ -256,15 +257,13 @@ func waitForProcessEnd(pid uint32, cancelChan chan struct{}) {
 		}
 
 		// timed out?
-		select {
-		case <-cancelChan:
+		if cancelled() {
 			return
-		default:
 		}
 	}
 }
 
-func waitForWindowPopup(hWindow windows.Handle, cancelChan chan struct{}) {
+func waitForWindowPopup(hWindow windows.Handle, cancelled gorou.Cancelled) {
 	for {
 		b, _, _ := isWindow.Call(uintptr(hWindow))
 		if b == 0 {
@@ -273,14 +272,12 @@ func waitForWindowPopup(hWindow windows.Handle, cancelChan chan struct{}) {
 
 		p, _, _ := getWindow.Call(uintptr(hWindow), winGWEnabledPopup)
 		if p != 0 && p != uintptr(hWindow) {
-			break
+			return
 		}
 
 		// timed out?
-		select {
-		case <-cancelChan:
+		if cancelled() {
 			return
-		default:
 		}
 
 		time.Sleep(20 * time.Millisecond)
@@ -403,84 +400,77 @@ func (g globalCmd) Run(args []string) error {
 }
 
 func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window, names []string) error {
-	wg := sync.WaitGroup{}
-
 	outputOnce := sync.Once{}
 
-	cancelOnce := sync.Once{}
-	doneChan := make(chan struct{})
-	timedOut := false
+	jg := gorou.Group()
 
 	for pid, p := range targetProcessDict {
 		verbose.Printf("waiting for %s\n", p.Format(g.Format))
 
-		wg.Add(1)
-		go func(pid uint32, p *process) {
-			defer wg.Done()
+		func(pid uint32, p *process) {
+			j := gorou.Routine(func(cancelled gorou.Cancelled) {
+				waitForProcessEnd(pid, cancelled)
 
-			waitForProcessEnd(pid, doneChan)
+				if g.Last {
+					return
+				}
 
-			if g.Last {
-				return
-			}
-
-			// output window info
-			if strings.Contains(g.Target, "w") {
-				// find windows by process
-				ww := clise.CopyFiltered(wins, func(i int) bool {
-					w := wins[i]
-					return w.Process != nil && w.Process.ID == pid && testMatch(w.Title, names)
-				}).([]*window)
-
-				for _, w := range ww {
-					if g.Once {
-						outputOnce.Do(func() {
+				// output window info
+				if strings.Contains(g.Target, "w") {
+					// find windows by process
+					var w *window
+					found := clise.Find(wins, &w, func(i int) bool {
+						w := wins[i]
+						return w.Process != nil && w.Process.ID == pid && testMatch(w.Title, names)
+					})
+					if found {
+						if g.Once {
+							outputOnce.Do(func() {
+								stdout.Printf("%s\n", w.format(g.Format))
+							})
+						} else {
 							stdout.Printf("%s\n", w.format(g.Format))
-						})
-					} else {
-						stdout.Printf("%s\n", w.format(g.Format))
+						}
 					}
 				}
-			}
-			if strings.Contains(g.Target, "p") {
-				if testMatch(p.Name, names) {
-					if g.Once {
-						outputOnce.Do(func() {
+				if strings.Contains(g.Target, "p") {
+					if testMatch(p.Name, names) {
+						if g.Once {
+							outputOnce.Do(func() {
+								stdout.Printf("%s\n", p.Format(g.Format))
+							})
+						} else {
 							stdout.Printf("%s\n", p.Format(g.Format))
-						})
-					} else {
-						stdout.Printf("%s\n", p.Format(g.Format))
+						}
 					}
 				}
-			}
-
-			if g.Once {
-				cancelOnce.Do(func() {
-					close(doneChan)
-				})
-			}
+			})
+			jg.Add(&j)
 		}(pid, p)
 	}
 
-	allDoneChan := make(chan struct{})
-	go func() {
-		wg.Wait()
-		allDoneChan <- struct{}{}
-	}()
+	jg.Run()
+
+	if g.Once {
+		jg.WaitAny()
+		jg.Cancel()
+		return nil
+	}
+
+	allDoneChan := gorou.Do(func() { jg.Wait() })
 
 	var timeoutChan <-chan time.Time
 	if g.Timeout > 0 {
 		timeoutChan = time.After(time.Duration(g.Timeout) * time.Millisecond)
 	}
 
+	timedOut := false
 	select {
 	case <-allDoneChan:
 		// nop but wait
 	case <-timeoutChan:
 		timedOut = true
-		cancelOnce.Do(func() {
-			close(doneChan)
-		})
+		jg.Cancel()
 	}
 
 	if timedOut {
@@ -493,38 +483,35 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 }
 
 func (g globalCmd) runPopupWait(wins []*window, names []string) error {
-	wg := sync.WaitGroup{}
 
 	outputOnce := sync.Once{}
 
-	cancelOnce := sync.Once{}
-	doneChan := make(chan struct{})
-	timedOut := false
+	jg := gorou.Group()
 
 	for _, w := range wins {
 		verbose.Printf("waiting for %s have popup\n", w.format(g.Format))
 
-		wg.Add(1)
-		go func(win *window) {
-			defer wg.Done()
+		func(win *window) {
+			j := gorou.Routine(func(cancelled gorou.Cancelled) {
 
-			waitForWindowPopup(win.Handle, doneChan)
+				waitForWindowPopup(win.Handle, cancelled)
 
-			outputOnce.Do(func() {
-				stdout.Printf("%v\n", win.format(g.Format))
+				outputOnce.Do(func() {
+					stdout.Printf("%v\n", win.format(g.Format))
+				})
 			})
-			cancelOnce.Do(func() {
-				close(doneChan)
-			})
+			jg.Add(&j)
 		}(w)
 	}
 
-	allDoneChan := make(chan struct{})
-	go func() {
-		wg.Wait()
-		allDoneChan <- struct{}{}
-	}()
+	jg.Run()
 
+	allDoneChan := gorou.Do(func() {
+		jg.WaitAny()
+		jg.Cancel()
+	})
+
+	timedOut := false
 	var timeoutChan <-chan time.Time
 	if g.Timeout > 0 {
 		timeoutChan = time.After(time.Duration(g.Timeout) * time.Millisecond)
@@ -535,9 +522,7 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 		// nop but wait
 	case <-timeoutChan:
 		timedOut = true
-		cancelOnce.Do(func() {
-			close(doneChan)
-		})
+		jg.Cancel()
 	}
 
 	if timedOut {
