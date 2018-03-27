@@ -11,7 +11,7 @@ import (
 
 	"bitbucket.org/shu/clise"
 	"bitbucket.org/shu/gli"
-	"bitbucket.org/shu/gorou"
+	"bitbucket.org/shu/goroup"
 	"bitbucket.org/shu/rog"
 	"golang.org/x/sys/windows"
 	//"github.com/golang/sys/windows"
@@ -234,7 +234,7 @@ type globalCmd struct {
 	Verbose bool `help:"verbose output to stderr"`
 }
 
-func waitForProcessEnd(pid uint32, cancelled gorou.Cancelled) {
+func waitForProcessEnd(pid uint32, cancelled goroup.Cancelled) {
 	hProcess, err := windows.OpenProcess(winSynchronize, false, pid)
 	if err != nil {
 		// no need to wait for it
@@ -263,7 +263,7 @@ func waitForProcessEnd(pid uint32, cancelled gorou.Cancelled) {
 	}
 }
 
-func waitForWindowPopup(hWindow windows.Handle, cancelled gorou.Cancelled) {
+func waitForWindowPopup(hWindow windows.Handle, cancelled goroup.Cancelled) {
 	for {
 		b, _, _ := isWindow.Call(uintptr(hWindow))
 		if b == 0 {
@@ -402,13 +402,13 @@ func (g globalCmd) Run(args []string) error {
 func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window, names []string) error {
 	outputOnce := sync.Once{}
 
-	jg := gorou.Group()
+	jg := goroup.Group()
 
 	for pid, p := range targetProcessDict {
 		verbose.Printf("waiting for %s\n", p.Format(g.Format))
 
 		func(pid uint32, p *process) {
-			j := gorou.Routine(func(cancelled gorou.Cancelled) {
+			j := goroup.Routine(func(cancelled goroup.Cancelled) {
 				waitForProcessEnd(pid, cancelled)
 
 				if g.Last {
@@ -457,7 +457,7 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 		return nil
 	}
 
-	allDoneChan := gorou.Do(func() { jg.Wait() })
+	allDoneChan := goroup.Do(func() { jg.Wait() })
 
 	var timeoutChan <-chan time.Time
 	if g.Timeout > 0 {
@@ -486,13 +486,13 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 
 	outputOnce := sync.Once{}
 
-	jg := gorou.Group()
+	jg := goroup.Group()
 
 	for _, w := range wins {
 		verbose.Printf("waiting for %s have popup\n", w.format(g.Format))
 
 		func(win *window) {
-			j := gorou.Routine(func(cancelled gorou.Cancelled) {
+			j := goroup.Routine(func(cancelled goroup.Cancelled) {
 
 				waitForWindowPopup(win.Handle, cancelled)
 
@@ -506,7 +506,7 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 
 	jg.Run()
 
-	allDoneChan := gorou.Do(func() {
+	allDoneChan := goroup.Do(func() {
 		jg.WaitAny()
 		jg.Cancel()
 	})
