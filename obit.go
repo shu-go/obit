@@ -402,13 +402,13 @@ func (g globalCmd) Run(args []string) error {
 func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window, names []string) error {
 	outputOnce := sync.Once{}
 
-	jg := goroup.Group()
+	group := goroup.Group()
 
 	for pid, p := range targetProcessDict {
 		verbose.Printf("waiting for %s\n", p.Format(g.Format))
 
 		func(pid uint32, p *process) {
-			j := goroup.Routine(func(cancelled goroup.Cancelled) {
+			routine := goroup.Ready(func(cancelled goroup.Cancelled) {
 				waitForProcessEnd(pid, cancelled)
 
 				if g.Last {
@@ -445,19 +445,19 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 					}
 				}
 			})
-			jg.Add(&j)
+			group.Add(&routine)
 		}(pid, p)
 	}
 
-	jg.Run()
+	group.Go()
 
 	if g.Once {
-		jg.WaitAny()
-		jg.Cancel()
+		group.WaitAny()
+		group.Cancel()
 		return nil
 	}
 
-	allDoneChan := goroup.Do(func() { jg.Wait() })
+	allDoneChan := goroup.Done(func() { group.Wait() })
 
 	var timeoutChan <-chan time.Time
 	if g.Timeout > 0 {
@@ -467,11 +467,10 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 	timedOut := false
 	select {
 	case <-allDoneChan:
-		// nop but wait
 	case <-timeoutChan:
 		timedOut = true
-		jg.Cancel()
 	}
+	group.Cancel()
 
 	if timedOut {
 		stdout.Printf("Some processes timed out.\n")
@@ -486,13 +485,13 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 
 	outputOnce := sync.Once{}
 
-	jg := goroup.Group()
+	group := goroup.Group()
 
 	for _, w := range wins {
 		verbose.Printf("waiting for %s have popup\n", w.format(g.Format))
 
 		func(win *window) {
-			j := goroup.Routine(func(cancelled goroup.Cancelled) {
+			routine := goroup.Ready(func(cancelled goroup.Cancelled) {
 
 				waitForWindowPopup(win.Handle, cancelled)
 
@@ -500,15 +499,14 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 					stdout.Printf("%v\n", win.format(g.Format))
 				})
 			})
-			jg.Add(&j)
+			group.Add(&routine)
 		}(w)
 	}
 
-	jg.Run()
+	group.Go()
 
-	allDoneChan := goroup.Do(func() {
-		jg.WaitAny()
-		jg.Cancel()
+	allDoneChan := goroup.Done(func() {
+		group.WaitAny()
 	})
 
 	timedOut := false
@@ -519,11 +517,10 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 
 	select {
 	case <-allDoneChan:
-		// nop but wait
 	case <-timeoutChan:
 		timedOut = true
-		jg.Cancel()
 	}
+	group.Cancel()
 
 	if timedOut {
 		stdout.Printf("Some processes timed out.\n")
