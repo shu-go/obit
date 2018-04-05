@@ -234,7 +234,7 @@ type globalCmd struct {
 	Verbose bool `help:"verbose output to stderr"`
 }
 
-func waitForProcessEnd(pid uint32, cancelled goroup.Cancelled) {
+func waitForProcessEnd(pid uint32, c goroup.Cancelled) {
 	hProcess, err := windows.OpenProcess(winSynchronize, false, pid)
 	if err != nil {
 		// no need to wait for it
@@ -257,13 +257,13 @@ func waitForProcessEnd(pid uint32, cancelled goroup.Cancelled) {
 		}
 
 		// timed out?
-		if cancelled() {
+		if c.Cancelled() {
 			return
 		}
 	}
 }
 
-func waitForWindowPopup(hWindow windows.Handle, cancelled goroup.Cancelled) {
+func waitForWindowPopup(hWindow windows.Handle, c goroup.Cancelled) {
 	for {
 		b, _, _ := isWindow.Call(uintptr(hWindow))
 		if b == 0 {
@@ -276,7 +276,7 @@ func waitForWindowPopup(hWindow windows.Handle, cancelled goroup.Cancelled) {
 		}
 
 		// timed out?
-		if cancelled() {
+		if c.Cancelled() {
 			return
 		}
 
