@@ -445,7 +445,7 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 					}
 				}
 			})
-			group.Add(&routine)
+			group.Add(routine)
 		}(pid, p)
 	}
 
@@ -499,7 +499,7 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 					stdout.Printf("%v\n", win.format(g.Format))
 				})
 			})
-			group.Add(&routine)
+			group.Add(routine)
 		}(w)
 	}
 
