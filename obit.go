@@ -402,7 +402,7 @@ func (g globalCmd) Run(args []string) error {
 func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window, names []string) error {
 	outputOnce := sync.Once{}
 
-	group := goroup.Group()
+	group := goroup.NewGroup()
 
 	for pid, p := range targetProcessDict {
 		verbose.Printf("waiting for %s\n", p.Format(g.Format))
@@ -485,7 +485,7 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 
 	outputOnce := sync.Once{}
 
-	group := goroup.Group()
+	group := goroup.NewGroup()
 
 	for _, w := range wins {
 		verbose.Printf("waiting for %s have popup\n", w.format(g.Format))
