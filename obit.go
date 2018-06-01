@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -234,7 +235,7 @@ type globalCmd struct {
 	Verbose bool `help:"verbose output to stderr"`
 }
 
-func waitForProcessEnd(pid uint32, c goroup.Cancelled) {
+func waitForProcessEnd(pid uint32, c context.Context) {
 	hProcess, err := windows.OpenProcess(winSynchronize, false, pid)
 	if err != nil {
 		// no need to wait for it
@@ -257,13 +258,13 @@ func waitForProcessEnd(pid uint32, c goroup.Cancelled) {
 		}
 
 		// timed out?
-		if c.Cancelled() {
+		if goroup.ContextDone(c) {
 			return
 		}
 	}
 }
 
-func waitForWindowPopup(hWindow windows.Handle, c goroup.Cancelled) {
+func waitForWindowPopup(hWindow windows.Handle, c context.Context) {
 	for {
 		b, _, _ := isWindow.Call(uintptr(hWindow))
 		if b == 0 {
@@ -276,7 +277,7 @@ func waitForWindowPopup(hWindow windows.Handle, c goroup.Cancelled) {
 		}
 
 		// timed out?
-		if c.Cancelled() {
+		if goroup.ContextDone(c) {
 			return
 		}
 
@@ -402,14 +403,14 @@ func (g globalCmd) Run(args []string) error {
 func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window, names []string) error {
 	outputOnce := sync.Once{}
 
-	group := goroup.NewGroup()
+	pregroup := goroup.NewGroup()
 
 	for pid, p := range targetProcessDict {
 		verbose.Printf("waiting for %s\n", p.Format(g.Format))
 
 		func(pid uint32, p *process) {
-			routine := goroup.Ready(func(cancelled goroup.Cancelled) {
-				waitForProcessEnd(pid, cancelled)
+			routine := goroup.Ready(func(c context.Context, _ ...interface{}) {
+				waitForProcessEnd(pid, c)
 
 				if g.Last {
 					return
@@ -445,11 +446,11 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 					}
 				}
 			})
-			group.Add(routine)
+			pregroup.Add(routine)
 		}(pid, p)
 	}
 
-	group.Go()
+	group := pregroup.Go(nil)
 
 	if g.Once {
 		group.WaitAny()
@@ -485,25 +486,25 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 
 	outputOnce := sync.Once{}
 
-	group := goroup.NewGroup()
+	pregroup := goroup.NewGroup()
 
 	for _, w := range wins {
 		verbose.Printf("waiting for %s have popup\n", w.format(g.Format))
 
 		func(win *window) {
-			routine := goroup.Ready(func(cancelled goroup.Cancelled) {
+			routine := goroup.Ready(func(c context.Context, _ ...interface{}) {
 
-				waitForWindowPopup(win.Handle, cancelled)
+				waitForWindowPopup(win.Handle, c)
 
 				outputOnce.Do(func() {
 					stdout.Printf("%v\n", win.format(g.Format))
 				})
 			})
-			group.Add(routine)
+			pregroup.Add(routine)
 		}(w)
 	}
 
-	group.Go()
+	group := pregroup.Go(nil)
 
 	allDoneChan := goroup.Done(func() {
 		group.WaitAny()
