@@ -6,6 +6,7 @@ set GOOS=windows
 set GOARCH=386
 set ZIPNAME=%NAME%_%GOOS%_%GOARCH%.zip 
 go build -ldflags "-s -w" %*
+if errorlevel 1 pause
 del %ZIPNAME% 2>nul
 zip %ZIPNAME% *.exe README.txt LICENSE.txt
 
