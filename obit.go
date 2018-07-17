@@ -10,10 +10,10 @@ import (
 	"time"
 	"unsafe"
 
-	"bitbucket.org/shu/clise"
-	"bitbucket.org/shu/gli"
-	"bitbucket.org/shu/goroup"
-	"bitbucket.org/shu/rog"
+	"bitbucket.org/shu_go/clise"
+	"bitbucket.org/shu_go/gli"
+	"bitbucket.org/shu_go/goroup"
+	"bitbucket.org/shu_go/rog"
 	"golang.org/x/sys/windows"
 	//"github.com/golang/sys/windows"
 )
@@ -224,6 +224,8 @@ func main() {
 type globalCmd struct {
 	Popup bool `help:"wait for the window have a popup window or exited, and exit"`
 	Once  bool `help:"output and exit when the first processe exits/popped-up"`
+
+	Interval int `cli:"i, interval=WAIT_IN_MS" help:"Window/Process watching interval in milliseconds (negative means watching once on startup-time)"`
 
 	Target string `cli:"target, t"  default:"wp"  help:"target: 'w' for windows, 'p' for processes"`
 	Last   bool   `cli:"last, l"  help:"output and exit only when all processes exit, without process info"`
@@ -468,6 +470,7 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 	timedOut := false
 	select {
 	case <-allDoneChan:
+		// nop
 	case <-timeoutChan:
 		timedOut = true
 	}
@@ -506,7 +509,7 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 
 	group := pregroup.Go(nil)
 
-	allDoneChan := goroup.Done(func() {
+	anyDoneChan := goroup.Done(func() {
 		group.WaitAny()
 	})
 
@@ -517,7 +520,8 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 	}
 
 	select {
-	case <-allDoneChan:
+	case <-anyDoneChan:
+		// nop
 	case <-timeoutChan:
 		timedOut = true
 	}
