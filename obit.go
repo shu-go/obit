@@ -208,7 +208,7 @@ func (p *process) Format(format string) string {
 }
 
 func main() {
-	app := gli.New(&globalCmd{})
+	app := gli.NewWith(&globalCmd{})
 	app.Name = "obit"
 	app.Desc = "obituary notifier via stdout"
 	app.Version = "0.3.1"
