@@ -10,10 +10,10 @@ import (
 	"time"
 	"unsafe"
 
-	"bitbucket.org/shu_go/clise"
-	"bitbucket.org/shu_go/gli"
-	"bitbucket.org/shu_go/goroup"
-	"bitbucket.org/shu_go/rog"
+	"github.com/shu-go/clise"
+	"github.com/shu-go/gli"
+	"github.com/shu-go/goroup"
+	"github.com/shu-go/rog"
 	"golang.org/x/sys/windows"
 	//"github.com/golang/sys/windows"
 )
