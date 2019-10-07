@@ -18,6 +18,15 @@ import (
 	//"github.com/golang/sys/windows"
 )
 
+// Version is app version
+var Version string
+
+func init() {
+	if Version == "" {
+		Version = "dev-" + time.Now().Format("20060102")
+	}
+}
+
 type (
 	process struct {
 		ID       uint32
@@ -211,7 +220,7 @@ func main() {
 	app := gli.NewWith(&globalCmd{})
 	app.Name = "obit"
 	app.Desc = "obituary notifier via stdout"
-	app.Version = "0.3.1"
+	app.Version = Version
 	app.Usage = `obit [--popup] {window title or process name, waited for its end}`
 	app.Copyright = "(C) 2017 Shuhei Kubota"
 
