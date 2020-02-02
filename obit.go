@@ -231,13 +231,13 @@ func main() {
 }
 
 type globalCmd struct {
-	Popup bool `help:"wait for the window have a popup window or exited, and exit"`
-	Once  bool `help:"output and exit when the first processe exits/popped-up"`
+	Popup bool `help:"wait for the window has a popup window or exits, and exit"`
+	Once  bool `help:"output and exit when any process exits/pops-up"`
 
 	Interval int `cli:"i, interval=WAIT_IN_MS" help:"Window/Process watching interval in milliseconds (negative means watching once on startup-time)"`
 
 	Target string `cli:"target, t"  default:"wp"  help:"target: 'w' for windows, 'p' for processes"`
-	Last   bool   `cli:"last, l"  help:"output and exit only when all processes exit, without process info"`
+	Last   bool   `cli:"last, l"  help:"output only when all processes exit, without process info"`
 
 	Timeout int `default:"-1"  help:"timeout in milliseconds (negative is INFINITE)"`
 
@@ -414,13 +414,13 @@ func (g globalCmd) Run(args []string) error {
 func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window, names []string) error {
 	outputOnce := sync.Once{}
 
-	pregroup := goroup.NewGroup()
+	grp := goroup.New()
 
 	for pid, p := range targetProcessDict {
 		verbose.Printf("waiting for %s\n", p.Format(g.Format))
 
 		func(pid uint32, p *process) {
-			routine := goroup.Ready(func(c context.Context, _ ...interface{}) {
+			routine := func(c context.Context) {
 				waitForProcessEnd(pid, c)
 
 				if g.Last {
@@ -456,20 +456,20 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 						}
 					}
 				}
-			})
-			pregroup.Add(routine)
+			}
+			grp.Add(routine)
 		}(pid, p)
 	}
 
-	group := pregroup.Go(nil)
+	grp.Go()
 
 	if g.Once {
-		group.WaitAny()
-		group.Cancel()
+		grp.WaitAny()
+		grp.Cancel()
 		return nil
 	}
 
-	allDoneChan := goroup.Done(func() { group.Wait() })
+	allDoneChan := goroup.Done(func() { grp.Wait() })
 
 	var timeoutChan <-chan time.Time
 	if g.Timeout > 0 {
@@ -483,7 +483,7 @@ func (g globalCmd) runProcessWait(targetProcessDict processDict, wins []*window,
 	case <-timeoutChan:
 		timedOut = true
 	}
-	group.Cancel()
+	grp.Cancel()
 
 	if timedOut {
 		stdout.Printf("Some processes timed out.\n")
@@ -498,28 +498,28 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 
 	outputOnce := sync.Once{}
 
-	pregroup := goroup.NewGroup()
+	grp := goroup.New()
 
 	for _, w := range wins {
 		verbose.Printf("waiting for %s have popup\n", w.format(g.Format))
 
 		func(win *window) {
-			routine := goroup.Ready(func(c context.Context, _ ...interface{}) {
+			routine := func(c context.Context) {
 
 				waitForWindowPopup(win.Handle, c)
 
 				outputOnce.Do(func() {
 					stdout.Printf("%v\n", win.format(g.Format))
 				})
-			})
-			pregroup.Add(routine)
+			}
+			grp.Add(routine)
 		}(w)
 	}
 
-	group := pregroup.Go(nil)
+	grp.Go()
 
 	anyDoneChan := goroup.Done(func() {
-		group.WaitAny()
+		grp.WaitAny()
 	})
 
 	timedOut := false
@@ -534,7 +534,7 @@ func (g globalCmd) runPopupWait(wins []*window, names []string) error {
 	case <-timeoutChan:
 		timedOut = true
 	}
-	group.Cancel()
+	grp.Cancel()
 
 	if timedOut {
 		stdout.Printf("Some processes timed out.\n")
