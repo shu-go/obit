@@ -1,6 +1,6 @@
 module github.com/shu-go/obit
 
-go 1.13
+go 1.26.2
 
 require (
 	github.com/rivo/uniseg v0.4.4 // indirect
